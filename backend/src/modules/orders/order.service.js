@@ -1,4 +1,4 @@
-import mongoose from "mongoose";
+﻿import mongoose from "mongoose";
 import Cart from "../cart/cart.model.js";
 import Product from "../products/products.modal.js";
 import Order from "./order.model.js";
@@ -118,12 +118,12 @@ export const cancelOrderForUser = async (orderId, userId) => {
         await session.withTransaction(async () => {
             const order = await Order.findOne({ _id: orderId, user: userId }).session(session);
             if (!order) throw new CheckoutError(404, "Order not found.");
-            if (order.status !== "PENDING") {
-                throw new CheckoutError(409, "Only pending orders can be cancelled by the customer.");
+            if (!["PENDING", "CONFIRMED"].includes(order.status)) {
+                throw new CheckoutError(409, "Orders can only be cancelled before processing starts.");
             }
 
             const result = await Order.updateOne(
-                { _id: orderId, user: userId, status: "PENDING" },
+                { _id: orderId, user: userId, status: order.status },
                 { $set: { status: "CANCELLED" } },
                 { session }
             );
@@ -199,3 +199,4 @@ export const changeOrderStatus = async (orderId, nextStatus) => {
     if (!updatedOrder) throw new CheckoutError(409, "The order status changed. Reload the order and try again.");
     return updatedOrder;
 };
+

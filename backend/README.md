@@ -16,7 +16,15 @@ REFRESH_TOKEN_SECRET=use-a-different-long-random-secret
 ACCESS_TOKEN_TTL=15m
 REFRESH_TOKEN_TTL=7d
 NODE_ENV=development
-CLIENT_URL=http://localhost:3000
+CLIENT_URL=http://localhost:5173
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your-smtp-username
+SMTP_PASSWORD=your-smtp-password
+EMAIL_FROM=ShopVerse <no-reply@example.com>
+# Local development only; exposes a reset link in the API response for Postman.
+RESET_PASSWORD_RETURN_LINK=true
 CLOUDINARY_CLOUD_NAME=your-cloud-name
 CLOUDINARY_API_KEY=your-cloudinary-api-key
 CLOUDINARY_API_SECRET=your-cloudinary-api-secret
@@ -26,6 +34,16 @@ CLOUDINARY_UPLOAD_TIMEOUT_MS=120000
 Base URL: `http://localhost:5000`. Login and refresh use an HTTP-only `refreshToken` cookie; Postman retains it in its cookie jar. Product text fields can be sent as JSON or multipart form-data. Product image uploads use Cloudinary; only Cloudinary `secure_url` strings are saved in MongoDB's `images` array. Set the three Cloudinary environment variables above to enable uploads.
 
 `CLOUDINARY_UPLOAD_TIMEOUT_MS` controls the maximum time allowed for each image upload. It defaults to `120000` milliseconds (2 minutes); increase it if your network is slow. Restart the server after changing `.env`.
+
+## Import DummyJSON products
+
+To seed the entire DummyJSON catalog into the local database, set `SEED_USER_ID` in `backend/.env` to the `_id` of an existing user. Products keep that user as their `createdBy` value. Then run:
+
+```sh
+npm run seed:products
+```
+
+The script fetches all available products from DummyJSON, maps them to the Product model, and upserts by SKU. Re-running it skips existing SKUs without overwriting them. This requires internet access and a reachable MongoDB instance. The authenticated admin bulk import endpoint is also available for uploading JSON files in batches of up to 200 products.
 
 ## Roles and first admin
 
@@ -77,6 +95,23 @@ Wrong credentials or a non-user role returns `401`.
 ### `POST /api/users/admin/login`
 
 Signs in an `ADMIN` using the same email/password body. It returns an admin access token and sets the refresh cookie. The initial admin is bootstrapped through the trusted database process above. Wrong credentials or a non-admin role returns `401`.
+
+### `POST /api/users/forgot-password`
+
+Starts password recovery. Request JSON is `{ "email": "ravi@example.com" }`. For a matching account, the API creates a cryptographically random token, stores only its SHA-256 hash, and expires it after 15 minutes. The response is deliberately the same whether or not the email exists. With SMTP configured, the reset link is emailed to the account. For local development only, set `RESET_PASSWORD_RETURN_LINK=true` (and keep `NODE_ENV` different from `production`) to receive a `resetUrl` in the response for Postman testing. Do not enable that option in production. Without SMTP or the local development option, the route returns `503`.
+
+SMTP configuration uses `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, and `EMAIL_FROM`. Set `CLIENT_URL` to the frontend origin; links point to `/reset-password?token=...` on that origin. Restart the backend after changing `.env`.
+
+### `POST /api/users/reset-password`
+
+Consumes the one-time token and changes the account password. Request JSON is `{ "token": "<token-from-reset-link>", "password": "NewExamplePass123!" }`. Passwords must contain 8–128 characters. A successful reset returns `200`, removes the reset token, and revokes the stored refresh session so it cannot be refreshed. The user must sign in again. Invalid, expired, or already-used links return `400`. A previously issued access JWT remains usable until its short configured expiry (`ACCESS_TOKEN_TTL`, 15 minutes by default); reset invalidates refresh sessions.
+
+#### Postman recovery flow
+
+1. In local `.env`, set `CLIENT_URL` to the frontend address (for example `http://localhost:5173`) and `RESET_PASSWORD_RETURN_LINK=true`. Restart the backend. SMTP is not needed in this development-only mode.
+2. Send `POST {{baseUrl}}/api/users/forgot-password` with `{ "email": "ravi@example.com" }`. Copy `resetUrl` from the response and take the `token` query parameter from it.
+3. Send `POST {{baseUrl}}/api/users/reset-password` with `{ "token": "<copied-token>", "password": "NewExamplePass123!" }`.
+4. Try signing in with the new password. The previous password should fail. Requesting the reset link again produces a fresh token; each token is single-use and expires after 15 minutes.
 
 ### `GET /api/users/me`
 
@@ -188,6 +223,25 @@ Checkout performs the stock updates, order creation, and cart clearing in one Mo
 
 Lists the signed-in user's orders with optional `page` and `limit` query parameters, or returns one of that user's orders. A customer cannot read another user's order; that request returns `404`.
 
+### `PATCH /api/users/me/address`
+
+Saves or replaces the signed-in customer's default delivery address in their user document. Requires a `USER` bearer token. Send `recipientName`, `phone`, `addressLine1`, `city`, `state`, `postalCode`, and `country`; `addressLine2` is optional. The response returns the updated public user profile. This address is used to prefill checkout, and each order still stores its own shipping-address snapshot.
+
+Example body:
+
+```json
+{
+  "recipientName": "Ravi Kumar",
+  "phone": "+15550000001",
+  "addressLine1": "12 Market Street",
+  "addressLine2": "Apartment 4B",
+  "city": "Chennai",
+  "state": "Tamil Nadu",
+  "postalCode": "600001",
+  "country": "India"
+}
+```
+
 ### `GET /api/admin/orders`
 
 Lists orders for an admin. Supports `page`, `limit`, and a `status` filter, such as `/api/admin/orders?status=PENDING`. Requires an `ADMIN` access token.
@@ -251,7 +305,7 @@ A read-then-save stock check is unsafe: two checkout requests can both read `sto
 
 The transaction applies that conditional decrement for every cart item, inserts the order snapshot, and clears the cart. If any item is unavailable, throwing an error aborts the transaction and rolls back all earlier decrements. This prevents a partial checkout. Each product document update is atomic by itself; the checkout transaction is needed because the operation spans multiple products, an order document, and the cart.
 
-Stock is not reserved when a customer adds an item to the cart. It is deducted at checkout. This version has no reservation-expiry worker; pending COD orders keep stock deducted until fulfilled or cancelled. Customer cancellation is `POST /api/orders/:orderId/cancel`, and admins can set `CANCELLED` with `PATCH /api/admin/orders/:orderId/status` while the order is `PENDING` or `CONFIRMED`. In both cases, changing the order and restoring the line-item quantities are one transaction; the state transition prevents duplicate restoration. A future payment-reservation flow should record reservation state and expiry, then atomically expire each still-active reservation and restore its quantity once.
+Stock is not reserved when a customer adds an item to the cart. It is deducted at checkout. This version has no reservation-expiry worker; pending COD orders keep stock deducted until fulfilled or cancelled. A customer can cancel with `POST /api/orders/:orderId/cancel` while the order is `PENDING` or `CONFIRMED`; cancellation is unavailable once processing starts. Admins can set `CANCELLED` with `PATCH /api/admin/orders/:orderId/status` while the order is `PENDING` or `CONFIRMED`. In both cases, changing the order and restoring the line-item quantities are one transaction; the state transition prevents duplicate restoration. A future payment-reservation flow should record reservation state and expiry, then atomically expire each still-active reservation and restore its quantity once.
 
 ### Transaction basics in this project
 

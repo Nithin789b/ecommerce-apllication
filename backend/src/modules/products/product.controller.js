@@ -1,14 +1,16 @@
 import mongoose from "mongoose";
 import {
+    bulkUpsertProducts,
     createProduct,
     findPublicProductById,
     listPublicProducts,
     updateProductById
 } from "./product.service.js";
+import Product from "./products.modal.js";
 import { uploadProductImages, deleteProductImages } from "./product-image.service.js";
 import { emitProductChange } from "./product-socket-events.js";
 
-const editableProductFields = new Set(["name", "description", "price", "category", "sku", "images", "stock"]);
+const editableProductFields = new Set(["name", "description", "price", "category", "sku", "images", "stock", "title", "brand", "discountPercentage", "rating", "tags", "thumbnail", "weight", "dimensions", "warrantyInformation", "shippingInformation", "availabilityStatus", "reviews", "returnPolicy", "minimumOrderQuantity"]);
 
 const parseNumber = (value) => {
     if (typeof value === "number") return value;
@@ -40,7 +42,10 @@ const cloudinaryUploadFailure = (error) => {
 };
 
 export const createAdminProduct = async (req, res) => {
-    const { name, description, category, sku } = req.body ?? {};
+    const body = req.body ?? {};
+    const name = body.name ?? body.title;
+    const { description, category } = body;
+    const sku = body.sku ?? `IMPORT-${body.id ?? Date.now()}`;
     const price = parseNumber(req.body?.price);
     const stock = req.body?.stock === undefined ? 0 : parseNumber(req.body.stock);
 
@@ -62,7 +67,7 @@ export const createAdminProduct = async (req, res) => {
     if (!Number.isInteger(stock) || stock < 0) {
         return res.status(400).json({ success: false, message: "Stock must be a non-negative whole number." });
     }
-    if (req.body?.images !== undefined) {
+    if (req.body?.images !== undefined && !Array.isArray(req.body.images)) {
         return res.status(400).json({ success: false, message: "Upload image files using the multipart form-data field named 'images'." });
     }
 
@@ -85,7 +90,8 @@ export const createAdminProduct = async (req, res) => {
             price,
             category: category.trim(),
             sku: sku.trim().toUpperCase(),
-            images: assets.map((asset) => asset.url),
+            images: assets.length ? assets.map((asset) => asset.url) : (Array.isArray(body.images) ? body.images : body.thumbnail ? [body.thumbnail] : []),
+            ...catalogMetadata(body),
             stock,
             createdBy: req.user.id
         });
@@ -96,6 +102,71 @@ export const createAdminProduct = async (req, res) => {
         if (error.name === "ValidationError") return res.status(400).json({ success: false, message: error.message });
         console.error("Create product error:", error);
         return res.status(500).json({ success: false, message: "Internal server error." });
+    }
+};
+
+const catalogMetadata = (body = {}) => {
+    const { id, meta, ...fields } = body;
+    const allowed = ["title", "brand", "discountPercentage", "rating", "tags", "thumbnail", "weight", "dimensions", "warrantyInformation", "shippingInformation", "availabilityStatus", "reviews", "returnPolicy", "minimumOrderQuantity"];
+    const metadata = Object.fromEntries(allowed.filter((field) => fields[field] !== undefined).map((field) => [field, fields[field]]));
+    if (id !== undefined) metadata.sourceId = Number(id);
+    if (meta && typeof meta === "object") metadata.sourceMeta = meta;
+    return metadata;
+};
+
+export const bulkImportAdminProducts = async (req, res) => {
+    const rows = Array.isArray(req.body) ? req.body : req.body?.products;
+    if (!Array.isArray(rows) || rows.length === 0 || rows.length > 200) {
+        return res.status(400).json({ success: false, message: "Provide a products array containing between 1 and 200 products." });
+    }
+
+    const documents = [];
+    const errors = [];
+    for (const [index, row] of rows.entries()) {
+        if (!row || typeof row !== "object" || Array.isArray(row)) {
+            errors.push({ index, message: "Product must be a JSON object." });
+            continue;
+        }
+        const name = row.name ?? row.title;
+        const sku = row.sku ?? (row.id !== undefined ? `IMPORT-${row.id}` : "");
+        const images = Array.isArray(row.images) ? row.images : row.thumbnail ? [row.thumbnail] : [];
+        const document = new Product({
+            name,
+            title: row.title ?? name,
+            description: row.description,
+            price: row.price,
+            category: row.category,
+            sku,
+            stock: row.stock ?? 0,
+            images,
+            ...catalogMetadata(row),
+            createdBy: req.user.id
+        });
+        try {
+            await document.validate();
+            documents.push(document);
+        } catch (error) {
+            errors.push({ index, message: error.message });
+        }
+    }
+    if (errors.length) return res.status(400).json({ success: false, message: "Some products are invalid; nothing was imported.", errors });
+
+    try {
+        const operations = documents.map((document) => {
+            const product = document.toObject();
+            return { updateOne: { filter: { sku: product.sku }, update: { $setOnInsert: product }, upsert: true } };
+        });
+        const result = await bulkUpsertProducts(operations);
+        const imported = result.upsertedCount ?? 0;
+        return res.status(200).json({
+            success: true,
+            message: `Imported ${imported} product(s); ${documents.length - imported} existing SKU(s) skipped.`,
+            imported,
+            skipped: documents.length - imported
+        });
+    } catch (error) {
+        console.error("Bulk product import error:", error);
+        return res.status(500).json({ success: false, message: "Bulk import failed. Check SKU values and try again." });
     }
 };
 
@@ -149,6 +220,19 @@ export const updateAdminProduct = async (req, res) => {
                 return res.status(400).json({ success: false, message: "SKU is required and cannot exceed 80 characters." });
             }
             updates.sku = value.trim().toUpperCase();
+        } else if (["discountPercentage", "rating", "weight", "minimumOrderQuantity"].includes(field)) {
+            const number = parseNumber(value);
+            const minimum = field === "minimumOrderQuantity" ? 1 : 0;
+            const maximum = ["discountPercentage", "rating"].includes(field) ? (field === "rating" ? 5 : 100) : Number.POSITIVE_INFINITY;
+            if (!Number.isFinite(number) || number < minimum || number > maximum) {
+                return res.status(400).json({ success: false, message: `${field} must be between ${minimum} and ${maximum}.` });
+            }
+            updates[field] = number;
+        } else if (["title", "brand", "thumbnail", "warrantyInformation", "shippingInformation", "availabilityStatus", "returnPolicy"].includes(field)) {
+            if (typeof value !== "string") return res.status(400).json({ success: false, message: `${field} must be text.` });
+            updates[field] = value.trim();
+        } else if (["tags", "dimensions", "reviews"].includes(field)) {
+            updates[field] = value;
         } else if (field === "stock") {
             const stock = parseNumber(value);
             if (!Number.isInteger(stock) || stock < 0) {
@@ -158,7 +242,11 @@ export const updateAdminProduct = async (req, res) => {
         }
     }
 
-    if (req.body?.images !== undefined) {
+    // Keep the aliases used by the import format and the storefront in sync.
+    if (Object.hasOwn(body, "title") && !Object.hasOwn(body, "name")) updates.name = updates.title;
+    else if (Object.hasOwn(body, "name")) updates.title = updates.name;
+
+    if (req.body?.images !== undefined && !Array.isArray(req.body.images)) {
         return res.status(400).json({ success: false, message: "Upload image files using the multipart form-data field named 'images'." });
     }
 
@@ -173,7 +261,15 @@ export const updateAdminProduct = async (req, res) => {
             message: failure.message
         });
     }
-    if (assets.length > 0) updates.images = assets.map((asset) => asset.url);
+    if (assets.length > 0) {
+        updates.images = assets.map((asset) => asset.url);
+        updates.thumbnail = updates.images[0] ?? "";
+    } else if (Array.isArray(body.images)) {
+        updates.images = body.images;
+        updates.thumbnail = body.images[0] ?? "";
+    } else if (typeof body.thumbnail === "string") {
+        updates.images = [body.thumbnail];
+    }
 
     try {
         const product = await updateProductById(productId, updates);

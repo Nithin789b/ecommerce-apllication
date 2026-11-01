@@ -1,0 +1,35 @@
+import { tw } from '../lib/tw';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { api } from '../api/api.js';
+import CatalogFilters from '../components/CatalogFilters.jsx';
+import EmptyState from '../components/ui/EmptyState.jsx';
+import LoadingSpinner from '../components/ui/LoadingSpinner.jsx';
+import Pagination from '../components/ui/Pagination.jsx';
+import ProductCard from '../components/ProductCard.jsx';
+const PAGE_SIZE=12;
+function ProductListPage(){
+ const [params,setParams]=useSearchParams(), search=params.get('search')||'', category=params.get('category')||'';
+ const page=Math.max(1,Number.parseInt(params.get('page')||'1',10)||1);
+ const [products,setProducts]=useState([]),[total,setTotal]=useState(0),[pages,setPages]=useState(0),[categories,setCategories]=useState([]);
+ const [isLoading,setIsLoading]=useState(true),[error,setError]=useState(''),[retry,setRetry]=useState(0);
+ const [inStockOnly,setInStockOnly]=useState(false),[priceCap,setPriceCap]=useState(100000),[sortBy,setSortBy]=useState('featured');
+ const query=useMemo(()=>{const p=new URLSearchParams({page:String(page),limit:String(PAGE_SIZE)});if(search)p.set('search',search);if(category)p.set('category',category);return p.toString()},[search,category,page]);
+ useEffect(()=>{let active=true;(async()=>{setIsLoading(true);setError('');const r=await api.get('/api/products?'+query);if(!active)return;if(r.error){setProducts([]);setTotal(0);setPages(0);setError(r.error.message)}else{const rows=r.data.items||[];setProducts(rows);setTotal(r.data.total||0);setPages(r.data.pages||0);setCategories(cur=>[...new Set([...cur,...rows.map(x=>x.category).filter(Boolean)])].sort((a,b)=>a.localeCompare(b)))}setIsLoading(false)})();return()=>{active=false}},[query,retry]);
+ function update(updates){const next=new URLSearchParams(params);Object.entries(updates).forEach(([k,v])=>v?next.set(k,v):next.delete(k));if(!('page'in updates))next.delete('page');setParams(next)}
+ function reset(){setInStockOnly(false);setPriceCap(100000);setSortBy('featured');setParams({})}
+ const visible=useMemo(()=>products.filter(x=>(!inStockOnly||x.stock>0)&&Number(x.price)*(1-(Number(x.discountPercentage)||0)/100)<=priceCap).sort((a,b)=>sortBy==='price-low'?a.price-b.price:sortBy==='price-high'?b.price-a.price:sortBy==='name'?(a.name||a.title||'').localeCompare(b.name||b.title||''):0),[products,inStockOnly,priceCap,sortBy]);
+ return <div className={tw("storefront page-width")}>
+  <section className={tw("storefront-hero")}><div className={tw("storefront-hero-copy")}><p className={tw("eyebrow")}>THE SHOPVERSE EDIT</p><h1 className={tw("mt-3 text-5xl font-semibold leading-[.98] tracking-[-.055em] text-[#282522] sm:text-6xl md:text-7xl")}>Good finds.<br/><span className={tw("font-serif font-normal italic text-[#a74f38]")}>Every day.</span></h1><p className={tw("mt-4 max-w-[420px] text-sm leading-6 text-[#62574f] sm:text-base")}>Discover everyday essentials, clever upgrades, and standout pieces across the categories you love.</p><a className={tw("mt-6 inline-flex items-center gap-3 rounded-full bg-[#282522] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#a74f38]")} href="#catalog">Explore the collection <span aria-hidden="true">→</span></a><small className={tw("mt-6 text-xs text-[#6f6259]")}>✦ &nbsp;A little something for everyone</small></div><div className={tw("storefront-hero-art")} aria-hidden="true"><span className={tw("hero-art-label")}>THE GOOD<br/>STUFF</span><span className={tw("hero-art-circle")}>✳</span><span className={tw("hero-art-caption")}>Find your new<br/>favorite thing.</span></div></section>
+  <div className={tw("catalog-utility")}><span><i/> Storefront catalog</span><span>Live inventory · ShopVerse</span></div>
+  <section className={tw("storefront-intro")} id="catalog"><div><p className={tw("eyebrow")}>A little bit of everything</p><h2 className={tw("mt-2 text-3xl font-semibold tracking-tight text-shop-ink sm:text-4xl")}>Find your next favorite</h2><p className={tw("storefront-subtitle")}>Browse {total} products across the things you use, wear, and love.</p></div><span className={tw("catalog-count")}>{total}<small> products</small></span></section>
+  <div className={tw("catalog-active-filters")}><span>Active facets</span>{category&&<button className={tw("rounded-full bg-shop-soft px-2.5 py-1 text-xs text-shop-ink")} type="button" onClick={()=>update({category:''})}>{category} ×</button>}{search&&<button className={tw("rounded-full bg-shop-soft px-2.5 py-1 text-xs text-shop-ink")} type="button" onClick={()=>update({search:''})}>“{search}” ×</button>}{inStockOnly&&<button className={tw("rounded-full bg-shop-soft px-2.5 py-1 text-xs text-shop-ink")} type="button" onClick={()=>setInStockOnly(false)}>In stock ×</button>}{priceCap<100000&&<button className={tw("rounded-full bg-shop-soft px-2.5 py-1 text-xs text-shop-ink")} type="button" onClick={()=>setPriceCap(100000)}>Under ₹{priceCap} ×</button>}{(category||search||inStockOnly||priceCap<100000)&&<button className={tw("text-xs font-semibold text-shop-rust")} type="button" onClick={reset}>Clear all filters</button>}</div>
+  {error&&<div className={tw("inline-error")} role="alert"><p>{error}</p><button className={tw("text-button")} type="button" onClick={()=>setRetry(x=>x+1)}>Try again</button></div>}
+  <div className={tw("catalog-layout")}><CatalogFilters categories={categories} category={category} setCategory={v=>update({category:v})} inStockOnly={inStockOnly} setInStockOnly={setInStockOnly} priceCap={priceCap} setPriceCap={setPriceCap} reset={reset}/>
+   <section className={tw("catalog-results")} aria-label="Product catalog"><div className={tw("catalog-toolbar")}><div><h2>Everyday pieces</h2><p>{isLoading?'Finding available products…':'Showing '+visible.length+' of '+total+' products'}</p></div><label className={tw("catalog-sort")}><span>Sort by</span><select value={sortBy} onChange={e=>setSortBy(e.target.value)}><option value="featured">Curator's pick</option><option value="price-low">Price: low to high</option><option value="price-high">Price: high to low</option><option value="name">Name</option></select></label></div>
+   {isLoading?<LoadingSpinner label="Loading products"/>:error?null:visible.length===0?<EmptyState title="No pieces match these filters" message="Adjust the category, availability, or price filters to see more of the collection." action={<button className={tw("button button-primary")} type="button" onClick={reset}>Clear filters</button>}/>:<><div className={tw("product-grid")}>{visible.map(p=><ProductCard key={p._id} product={p}/>)}</div><Pagination page={page} pages={pages} onPageChange={n=>update({page:String(n)})}/></>}</section>
+  </div>
+  <section className={tw("atelier-callout")}><p className={tw("eyebrow")}>The atelier commitment</p><h2>Small batches. Timeless materials.</h2><p>We favor well-made essentials with honest materials and a useful place in your home. Each piece is supplied by the ShopVerse catalog.</p><a href="#main-content">Explore the collection ↗</a></section>
+ </div>
+}
+export default ProductListPage;

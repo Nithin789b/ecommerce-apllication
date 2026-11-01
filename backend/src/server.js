@@ -7,7 +7,7 @@ import { authenticateSocket } from "./socket/socket-auth.middleware.js";
 import { registerProductSocketHandlers } from "./socket/product-socket.handlers.js";
 
 const PORT = process.env.PORT || 5000;
-const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:3000";
+const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:5173";
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
     cors: { origin: CLIENT_URL, credentials: true }
