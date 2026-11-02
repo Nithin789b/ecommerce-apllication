@@ -41,3 +41,34 @@ export const findUserRoleById = async (userId) =>
 
 export const clearRefreshTokenHash = async (userId) =>
     userModel.updateOne({ _id: userId }, { $set: { refreshTokenHash: null } });
+
+export const savePasswordReset = async (userId, tokenHash, expiresAt) =>
+    userModel.updateOne(
+        { _id: userId },
+        { $set: { passwordResetTokenHash: tokenHash, passwordResetExpiresAt: expiresAt } }
+    );
+
+export const findUserByPasswordResetHash = async (tokenHash) =>
+    userModel.findOne({ passwordResetTokenHash: tokenHash })
+        .select("+passwordResetTokenHash +passwordResetExpiresAt");
+
+export const updatePasswordWithResetToken = async (tokenHash, hashedPassword) =>
+    userModel.findOneAndUpdate(
+        { passwordResetTokenHash: tokenHash, passwordResetExpiresAt: { $gt: new Date() } },
+        {
+            $set: {
+                password: hashedPassword,
+                passwordResetTokenHash: null,
+                passwordResetExpiresAt: null,
+                refreshTokenHash: null
+            }
+        },
+        { new: true, runValidators: true }
+    );
+
+export const saveDefaultAddress = async (userId, defaultAddress) =>
+    userModel.findByIdAndUpdate(
+        userId,
+        { $set: { defaultAddress } },
+        { new: true, runValidators: true }
+    );

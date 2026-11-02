@@ -4,6 +4,9 @@ const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export const createProduct = (productData) => Product.create(productData);
 
+export const bulkUpsertProducts = (operations) =>
+    Product.bulkWrite(operations, { ordered: true });
+
 export const updateProductById = (productId, updates) =>
     Product.findByIdAndUpdate(productId, { $set: updates, $inc: { version: 1 } }, { new: true, runValidators: true });
 
