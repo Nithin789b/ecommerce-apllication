@@ -8,7 +8,6 @@ import { registerProductSocketHandlers } from "./socket/product-socket.handlers.
 
 const PORT = process.env.PORT || 5000;
 const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:5173";
-const TEST_MONGODB_URI = process.env.TEST_MONGODB_URI || "mongodb://mongo:27017/ecommerce_test?replicaSet=rs0";
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
     cors: { origin: CLIENT_URL, credentials: true }

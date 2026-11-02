@@ -33,7 +33,7 @@ CLOUDINARY_UPLOAD_TIMEOUT_MS=120000
 
 ## Deploy
 
-The backend can run from the `backend` directory with `npm ci` followed by `npm start`, or from the included Dockerfile. Configure these environment variables in the hosting provider's dashboard:
+For Render, set the root directory to `backend`, use the Node runtime, build with `npm ci`, and start with `npm start`. Configure these environment variables in the hosting provider's dashboard:
 
 - `MONGO_URI`: MongoDB Atlas connection string. Allow the hosting provider's outbound IP addresses in the Atlas network access list, or configure Atlas access according to the provider's guidance.
 - `ACCESS_TOKEN_SECRET` and `REFRESH_TOKEN_SECRET`: distinct, randomly generated secrets.
