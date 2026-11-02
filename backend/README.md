@@ -31,6 +31,20 @@ CLOUDINARY_API_SECRET=your-cloudinary-api-secret
 CLOUDINARY_UPLOAD_TIMEOUT_MS=120000
 ```
 
+## Deploy
+
+The backend can run from the `backend` directory with `npm ci` followed by `npm start`, or from the included Dockerfile. Configure these environment variables in the hosting provider's dashboard:
+
+- `MONGO_URI`: MongoDB Atlas connection string. Allow the hosting provider's outbound IP addresses in the Atlas network access list, or configure Atlas access according to the provider's guidance.
+- `ACCESS_TOKEN_SECRET` and `REFRESH_TOKEN_SECRET`: distinct, randomly generated secrets.
+- `CLIENT_URL`: the deployed frontend's origin, without a trailing slash.
+- `NODE_ENV=production`
+- `RESET_PASSWORD_RETURN_LINK=false`
+- SMTP variables (`SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM`) if password recovery emails are needed.
+- Cloudinary variables (`CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`) if image uploads are needed.
+
+The host should provide `PORT`; the server listens on that value. Configure `/api/health` as the health check path. Do not deploy `.env` or commit production secrets. Leave `MONGODB_DNS_SERVERS` unset on hosted environments so the host's DNS configuration is used. It is only an optional workaround for local DNS problems.
+
 Base URL: `http://localhost:5000`. Login and refresh use an HTTP-only `refreshToken` cookie; Postman retains it in its cookie jar. Product text fields can be sent as JSON or multipart form-data. Product image uploads use Cloudinary; only Cloudinary `secure_url` strings are saved in MongoDB's `images` array. Set the three Cloudinary environment variables above to enable uploads.
 
 `CLOUDINARY_UPLOAD_TIMEOUT_MS` controls the maximum time allowed for each image upload. It defaults to `120000` milliseconds (2 minutes); increase it if your network is slow. Restart the server after changing `.env`.
